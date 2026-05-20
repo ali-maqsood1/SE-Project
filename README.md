@@ -2,6 +2,11 @@
 
 IntegrityGuard AI is a web-based academic integrity analyzer that detects semantic plagiarism and estimates AI-generated content probability for student submissions.
 
+## Group Members
+
+Ali Maqsood - BSCS24017
+Abdullah Nawaz - BSCS24009
+
 ## Features
 
 - Batch upload up to 30 PDF/TXT assignments
