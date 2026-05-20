@@ -130,8 +130,12 @@ def compute_pair_similarity(
             break
 
     # Overall score = mean of top-N sentence-pair cosine scores
-    flat_scores = np.sort(sim_matrix.ravel())[::-1][:TOP_N_OVERALL]
-    overall = float(np.mean(flat_scores)) if flat_scores.size else 0.0
+    max_pairs = min(TOP_N_OVERALL, len(sents_a), len(sents_b))
+    if max_pairs <= 0:
+        overall = 0.0
+    else:
+        flat_scores = np.sort(sim_matrix.ravel())[::-1][:max_pairs]
+        overall = float(np.mean(flat_scores)) if flat_scores.size else 0.0
 
     # Paragraph-level comparison (also uses pre-encoded sentences, re-aggregated)
     flagged_paragraphs = _compare_paragraphs(

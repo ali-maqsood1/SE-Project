@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="AI Academic Integrity Analyzer API",
+    title="IntegrityGuard AI",
     description="Batch semantic plagiarism detection + AI-generated content analysis",
     version="2.0.0",
     lifespan=lifespan,
@@ -49,7 +49,7 @@ app.add_middleware(
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "AI Academic Integrity Analyzer", "version": "2.0.0"}
+    return {"status": "ok", "service": "IntegrityGuard AI", "version": "2.0.0"}
 
 
 @app.get("/health")
