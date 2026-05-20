@@ -211,8 +211,12 @@ export function downloadBlob(filename: string, content: string, type: string) {
 }
 
 export function openReportWindow(html: string) {
-  const win = window.open("", "_blank", "noopener,noreferrer");
-  if (!win) return;
+  const win = window.open("", "_blank");
+  if (!win) {
+    downloadBlob("integrity-report.html", html, "text/html");
+    return;
+  }
+  win.opener = null;
   win.document.open();
   win.document.write(html);
   win.document.close();

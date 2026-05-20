@@ -5,7 +5,7 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "AI Academic Integrity Analyzer",
+  title: "IntegrityGuard AI",
   description: "Batch semantic plagiarism + AI content detection for up to 30 assignments",
 };
 

@@ -18,16 +18,9 @@ export default function Home() {
             <span className="text-xl">🎓</span>
             <div>
               <span className="font-bold text-gray-900 dark:text-white text-sm sm:text-base">
-                AI Academic Integrity Analyzer
-              </span>
-              <span className="hidden sm:inline text-xs text-gray-400 ml-2">
-                Batch · up to 30 assignments
+                IntegrityGuard AI
               </span>
             </div>
-          </div>
-          <div className="flex items-center gap-1.5 text-xs text-gray-400 dark:text-gray-500">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block animate-pulse"/>
-            Live
           </div>
         </div>
       </nav>
