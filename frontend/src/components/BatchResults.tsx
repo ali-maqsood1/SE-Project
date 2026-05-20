@@ -10,6 +10,7 @@ import {
   buildHtmlReport,
   buildJsonReport,
   buildTextReport,
+  downloadPdfReport,
   downloadBlob,
   openReportWindow,
 } from "@/lib/report";
@@ -41,6 +42,10 @@ export default function BatchResults({ result, onReset }: Props) {
       buildJsonReport(result),
       "application/json"
     );
+  };
+
+  const downloadPdf = () => {
+    downloadPdfReport(result, `integrity-report-${fileStamp}.pdf`);
   };
 
   const openHtmlReport = () => {
@@ -85,6 +90,12 @@ export default function BatchResults({ result, onReset }: Props) {
             className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-blue-400"
           >
             Download JSON
+          </button>
+          <button
+            onClick={downloadPdf}
+            className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-blue-400"
+          >
+            Download PDF
           </button>
           <button
             onClick={onReset}
@@ -292,6 +303,11 @@ function PairRow({ pair, rank, onSelect }: {
 function AIRow({ asgn, rowNum }: { asgn: AssignmentMeta; rowNum: number }) {
   const ai = asgn.ai;
   const shade = rowNum % 2 === 0;
+  const inconclusive =
+    !ai.skipped &&
+    ai.ai_probability_pct != null &&
+    ai.ai_probability_pct >= 31 &&
+    ai.ai_probability_pct <= 60;
 
   return (
     <tr className={shade ? "bg-gray-50 dark:bg-gray-800/30" : ""}>
@@ -327,6 +343,11 @@ function AIRow({ asgn, rowNum }: { asgn: AssignmentMeta; rowNum: number }) {
         <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${getRiskBadge(ai.risk_level)}`}>
           {getRiskLabel(ai.risk_level)}
         </span>
+        {inconclusive && (
+          <div className="text-[11px] text-gray-400 mt-1">
+            Inconclusive: The text may be partially AI-generated or heavily edited from AI output.
+          </div>
+        )}
       </td>
     </tr>
   );

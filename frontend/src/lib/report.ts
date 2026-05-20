@@ -1,3 +1,4 @@
+import { jsPDF } from "jspdf";
 import { BatchAnalysisResponse, PairResult } from "@/types/analysis";
 
 function formatPct(value: number | null | undefined) {
@@ -7,6 +8,30 @@ function formatPct(value: number | null | undefined) {
 
 function pairLabel(pair: PairResult) {
   return `${pair.name_a} vs ${pair.name_b}`;
+}
+
+function normalizeForPdf(text: string) {
+  if (!text) return "";
+  let out = text;
+  out = out.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, " ");
+  out = out.replace(/[\u2022\u25cf\u25a0]/g, "-");
+  out = out.replace(/[\u2013\u2014\u2212\u2010\u2011]/g, "-");
+  out = out.replace(/[\u2018\u2019]/g, "'");
+  out = out.replace(/[\u201c\u201d]/g, '"');
+  out = out.replace(/\u2026/g, "...");
+  out = out.replace(/\s+/g, " ").trim();
+  out = out.replace(/\b(?:[A-Za-z]\s){2,}[A-Za-z]\b/g, (m) => m.replace(/\s+/g, ""));
+  return out;
+}
+
+function getAiNote(ai: BatchAnalysisResponse["assignments"][number]["ai"]) {
+  if (ai.skipped) {
+    return `Skipped: ${ai.skip_reason}`;
+  }
+  if (ai.ai_probability_pct != null && ai.ai_probability_pct >= 31 && ai.ai_probability_pct <= 60) {
+    return "Inconclusive: The text may be partially AI-generated or heavily edited from AI output.";
+  }
+  return "";
 }
 
 export function buildTextReport(result: BatchAnalysisResponse): string {
@@ -52,8 +77,9 @@ export function buildTextReport(result: BatchAnalysisResponse): string {
   result.assignments.forEach((a) => {
     const ai = a.ai;
     const aiPct = ai.ai_probability_pct != null ? `${ai.ai_probability_pct}%` : "N/A";
-    const note = ai.skipped ? ` (skipped: ${ai.skip_reason})` : "";
-    lines.push(`- ${a.name}: ${aiPct} (${ai.risk_level})${note}`);
+    const note = getAiNote(ai);
+    const suffix = note ? ` (${note})` : "";
+    lines.push(`- ${a.name}: ${aiPct} (${ai.risk_level})${suffix}`);
   });
   lines.push("");
 
@@ -110,13 +136,14 @@ export function buildHtmlReport(result: BatchAnalysisResponse): string {
     .map((a) => {
       const ai = a.ai;
       const aiPct = ai.ai_probability_pct != null ? `${ai.ai_probability_pct}%` : "N/A";
-      const note = ai.skipped ? ` (skipped: ${ai.skip_reason})` : "";
+      const note = getAiNote(ai);
+      const noteHtml = note ? `<div class="meta">${note}</div>` : "";
       return `
         <tr>
           <td>${a.name}</td>
           <td>${a.word_count}</td>
           <td>${aiPct}</td>
-          <td>${ai.risk_level}${note}</td>
+          <td>${ai.risk_level}${noteHtml}</td>
         </tr>`;
     })
     .join("");
@@ -208,6 +235,117 @@ export function downloadBlob(filename: string, content: string, type: string) {
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+export function downloadPdfReport(result: BatchAnalysisResponse, filename: string) {
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const margin = 40;
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const maxWidth = pageWidth - margin * 2;
+  const lineHeight = 14;
+  const headingLineHeight = 18;
+  let y = margin;
+
+  const ensureSpace = (nextHeight: number) => {
+    if (y + nextHeight > pageHeight - margin) {
+      doc.addPage();
+      y = margin;
+    }
+  };
+
+  const addLines = (lines: string[], size = 11, style: "normal" | "bold" = "normal") => {
+    doc.setFont("helvetica", style);
+    doc.setFontSize(size);
+    lines.forEach((line) => {
+      ensureSpace(lineHeight);
+      doc.text(line, margin, y);
+      y += lineHeight;
+    });
+  };
+
+  const addWrapped = (text: string, size = 11, style: "normal" | "bold" = "normal") => {
+    const normalized = normalizeForPdf(text);
+    if (!normalized) return;
+    const lines = doc.splitTextToSize(normalized, maxWidth) as string[];
+    addLines(lines, size, style);
+  };
+
+  const addHeading = (text: string) => {
+    y += 6;
+    const lines = doc.splitTextToSize(text, maxWidth) as string[];
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(14);
+    lines.forEach((line) => {
+      ensureSpace(headingLineHeight);
+      doc.text(line, margin, y);
+      y += headingLineHeight;
+    });
+    y += 2;
+  };
+
+  const addSubheading = (text: string) => {
+    y += 4;
+    const lines = doc.splitTextToSize(text, maxWidth) as string[];
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(12);
+    lines.forEach((line) => {
+      ensureSpace(lineHeight);
+      doc.text(line, margin, y);
+      y += lineHeight;
+    });
+  };
+
+  addWrapped("IntegrityGuard AI - Academic Integrity Report", 16, "bold");
+  addWrapped(`Generated: ${new Date().toISOString()}`, 10, "normal");
+
+  addHeading("Executive Summary");
+  addWrapped(`- Assignments analyzed: ${result.assignment_count}`);
+  addWrapped(`- Pair count: ${result.pair_count}`);
+  addWrapped(`- Highest similarity: ${formatPct(result.overall_stats.highest_similarity_pct)}`);
+  addWrapped(`- Average similarity: ${formatPct(result.overall_stats.average_similarity_pct)}`);
+  addWrapped(`- High risk pairs: ${result.overall_stats.high_risk_pairs}`);
+  addWrapped(`- Flagged for review: ${result.overall_stats.flagged_for_review}`);
+  addWrapped(`- Highest AI probability: ${formatPct(result.overall_stats.highest_ai_pct)}`);
+  addWrapped(`- Average AI probability: ${formatPct(result.overall_stats.average_ai_pct)}`);
+
+  addHeading("Pairwise Similarity Summary");
+  result.similarity.pairs.forEach((pair) => {
+    addWrapped(`- ${pairLabel(pair)}: ${pair.overall_score_pct}% (${pair.risk_level})`);
+  });
+
+  addHeading("Flagged Sections");
+  const flaggedPairs = result.similarity.pairs.filter((p) => p.flagged_paragraphs.length);
+  if (!flaggedPairs.length) {
+    addWrapped("No flagged sections exceeded the threshold.");
+  } else {
+    flaggedPairs.forEach((pair) => {
+      addSubheading(pairLabel(pair));
+      pair.flagged_paragraphs.forEach((p) => {
+        addWrapped(`Para ${p.para_a_index} vs Para ${p.para_b_index} - ${p.score_pct}%`);
+        addWrapped(`A: ${p.para_a_text}`);
+        addWrapped(`B: ${p.para_b_text}`);
+      });
+    });
+  }
+
+  addHeading("AI Probability Breakdown");
+  result.assignments.forEach((a) => {
+    const ai = a.ai;
+    const aiPct = ai.ai_probability_pct != null ? `${ai.ai_probability_pct}%` : "N/A";
+    const note = getAiNote(ai);
+    addWrapped(`- ${a.name}: ${aiPct} (${ai.risk_level})`);
+    if (note) {
+      addWrapped(`  Note: ${note}`);
+    }
+  });
+
+  addHeading("Disclaimer");
+  addWrapped(
+    "All scores are probabilistic indicators to assist human review and are not definitive verdicts."
+  );
+
+  doc.save(filename);
 }
 
 export function openReportWindow(html: string) {
