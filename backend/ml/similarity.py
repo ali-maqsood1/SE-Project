@@ -19,11 +19,35 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
 from itertools import combinations
 
 from ml.models import get_embedding_model
 from utils.preprocessor import preprocess_text, split_into_paragraphs
+
+
+def cosine_similarity(A: np.ndarray, B: np.ndarray) -> np.ndarray:
+    """
+    Compute pairwise cosine similarity between rows of A and rows of B.
+    A: shape (N, D) or (D,)
+    B: shape (M, D) or (D,)
+    Returns: shape (N, M)
+    """
+    if A.ndim == 1:
+        A = A.reshape(1, -1)
+    if B.ndim == 1:
+        B = B.reshape(1, -1)
+
+    if A.size == 0 or B.size == 0:
+        return np.zeros((A.shape[0], B.shape[0]))
+
+    norm_A = np.linalg.norm(A, axis=1, keepdims=True)
+    norm_B = np.linalg.norm(B, axis=1, keepdims=True)
+
+    # Avoid division by zero
+    norm_A = np.where(norm_A == 0, 1e-9, norm_A)
+    norm_B = np.where(norm_B == 0, 1e-9, norm_B)
+
+    return np.dot(A / norm_A, (B / norm_B).T)
 
 SIMILARITY_THRESHOLD = 0.75   # paragraph flagging cutoff (SRS default)
 MIN_SCORE_FOR_PAIRS  = 0.50   # minimum score to include in top sentence pairs
