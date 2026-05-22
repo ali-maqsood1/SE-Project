@@ -11,102 +11,14 @@
 import os
 import requests
 import numpy as np
-import socket
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DNS Patch for Render DNS Resolution Issues (DoH + Static IP Fallback)
+# DNS Patch for Render DNS Resolution Issues (DoH Fallback)
 # ─────────────────────────────────────────────────────────────────────────────
 import urllib3
 from urllib3.util import connection
 
 orig_create_connection = connection.create_connection
-
-def is_ip_address(host: str) -> bool:
-    try:
-        socket.inet_aton(host)
-        return True
-    except socket.error:
-        return False
-
-def connect_ip(ip, port, timeout=None, source_address=None, socket_options=None):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    if socket_options:
-        for opt in socket_options:
-            sock.setsockopt(*opt)
-    if timeout is not None and timeout is not socket._GLOBAL_DEFAULT_TIMEOUT:
-        sock.settimeout(timeout)
-    if source_address:
-        sock.bind(source_address)
-    sock.connect((ip, port))
-    return sock
-
-def resolve_dns_udp(hostname: str) -> str:
-    import struct
-    import random
-    
-    tx_id = random.randint(0, 65535)
-    flags = 0x0100  # Standard query with recursion desired
-    qdcount = 1
-    ancount = 0
-    nscount = 0
-    arcount = 0
-    header = struct.pack("!HHHHHH", tx_id, flags, qdcount, ancount, nscount, arcount)
-    
-    parts = hostname.split(".")
-    question = b""
-    for part in parts:
-        question += struct.pack("!B", len(part)) + part.encode("utf-8")
-    question += b"\x00"
-    
-    qtype = 1  # Type A
-    qclass = 1  # Class IN
-    question += struct.pack("!HH", qtype, qclass)
-    
-    packet = header + question
-    
-    # Try multiple public DNS servers over UDP port 53
-    dns_servers = ["1.1.1.1", "8.8.8.8", "9.9.9.9", "208.67.222.222"]
-    
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.settimeout(3.0)
-    
-    last_err = None
-    for dns_server in dns_servers:
-        try:
-            s.sendto(packet, (dns_server, 53))
-            data, _ = s.recvfrom(512)
-            
-            # Parse response
-            res_id, _, _, res_ancount, _, _ = struct.unpack("!HHHHHH", data[:12])
-            if res_id != tx_id:
-                continue
-                
-            offset = 12
-            # Skip question section
-            while data[offset] != 0:
-                offset += 1 + data[offset]
-            offset += 5  # zero byte + qtype + qclass
-            
-            # Parse answers
-            for _ in range(res_ancount):
-                if (data[offset] & 0xC0) == 0xC0:
-                    offset += 2
-                else:
-                    while data[offset] != 0:
-                        offset += 1 + data[offset]
-                    offset += 1
-                
-                atype, aclass, attl, adatalen = struct.unpack("!HHIH", data[offset:offset+10])
-                offset += 10
-                
-                if atype == 1 and adatalen == 4:
-                    return socket.inet_ntoa(data[offset:offset+4])
-                offset += adatalen
-        except Exception as e:
-            last_err = e
-            continue
-            
-    raise last_err or RuntimeError("DNS resolution failed on all UDP servers.")
 
 def resolve_dns_doh(hostname: str) -> str:
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -122,7 +34,7 @@ def resolve_dns_doh(hostname: str) -> str:
                     if ans.get("type") == 1:  # A record
                         return ans.get("data")
     except Exception as e:
-        print(f"⚠️ Google DoH resolution failed: {e}", flush=True)
+        print(f"⚠️ Google DoH resolution failed: {e}")
         
     # Try Cloudflare DoH by IP
     try:
@@ -136,52 +48,25 @@ def resolve_dns_doh(hostname: str) -> str:
                     if ans.get("type") == 1:  # A record
                         return ans.get("data")
     except Exception as e:
-        print(f"⚠️ Cloudflare DoH resolution failed: {e}", flush=True)
+        print(f"⚠️ Cloudflare DoH resolution failed: {e}")
         
     raise RuntimeError(f"Failed to resolve {hostname} via DoH.")
 
-def patched_create_connection(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None, socket_options=None):
+def patched_create_connection(address, *args, **kwargs):
     host, port = address
-    
-    # If the host is already an IP address, connect directly and bypass getaddrinfo
-    if is_ip_address(host):
-        try:
-            return connect_ip(host, port, timeout, source_address, socket_options)
-        except Exception as e:
-            print(f"⚠️ Direct IP connection to {host} failed: {e}", flush=True)
-            raise e
-
     if host == "api-inference.huggingface.co":
         try:
-            return orig_create_connection(address, timeout, source_address, socket_options)
+            return orig_create_connection(address, *args, **kwargs)
         except Exception as e:
-            print(f"⚠️ Standard DNS resolution failed for {host}: {e}. Trying UDP DNS fallback...", flush=True)
+            print(f"⚠️ Standard DNS resolution failed for {host}: {e}. Trying DoH fallback...")
             try:
-                ip = resolve_dns_udp(host)
-                print(f"📡 UDP DNS resolved {host} to {ip}", flush=True)
-                return connect_ip(ip, port, timeout, source_address, socket_options)
-            except Exception as udp_err:
-                print(f"⚠️ UDP DNS fallback failed: {udp_err}. Trying DoH fallback...", flush=True)
-                try:
-                    ip = resolve_dns_doh(host)
-                    print(f"📡 DoH resolved {host} to {ip}", flush=True)
-                    return connect_ip(ip, port, timeout, source_address, socket_options)
-                except Exception as doh_err:
-                    print(f"⚠️ DoH fallback also failed: {doh_err}. Trying static IP fallback...", flush=True)
-                    # Static IP fallback (Cloudflare edge IPs routing to Hugging Face)
-                    static_ips = ["104.18.33.242", "172.64.155.249", "104.18.32.242", "172.64.154.249"]
-                    import random
-                    random.shuffle(static_ips)
-                    for ip in static_ips:
-                        try:
-                            sock = connect_ip(ip, port, timeout, source_address, socket_options)
-                            print(f"📡 Connected to {host} via static IP fallback: {ip}", flush=True)
-                            return sock
-                        except Exception as static_err:
-                            print(f"⚠️ Static IP fallback to {ip} failed: {static_err}", flush=True)
-                    raise e
-                
-    return orig_create_connection(address, timeout, source_address, socket_options)
+                ip = resolve_dns_doh(host)
+                print(f"📡 DoH resolved {host} to {ip}")
+                return orig_create_connection((ip, port), *args, **kwargs)
+            except Exception as doh_err:
+                print(f"⚠️ DoH fallback also failed: {doh_err}")
+                raise e
+    return orig_create_connection(address, *args, **kwargs)
 
 connection.create_connection = patched_create_connection
 
