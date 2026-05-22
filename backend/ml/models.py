@@ -11,14 +11,34 @@
 import os
 import requests
 import numpy as np
+import socket
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DNS Patch for Render DNS Resolution Issues (DoH Fallback)
+# DNS Patch for Render DNS Resolution Issues (DoH + Static IP Fallback)
 # ─────────────────────────────────────────────────────────────────────────────
 import urllib3
 from urllib3.util import connection
 
 orig_create_connection = connection.create_connection
+
+def is_ip_address(host: str) -> bool:
+    try:
+        socket.inet_aton(host)
+        return True
+    except socket.error:
+        return False
+
+def connect_ip(ip, port, timeout=None, source_address=None, socket_options=None):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    if socket_options:
+        for opt in socket_options:
+            sock.setsockopt(*opt)
+    if timeout is not None and timeout is not socket._GLOBAL_DEFAULT_TIMEOUT:
+        sock.settimeout(timeout)
+    if source_address:
+        sock.bind(source_address)
+    sock.connect((ip, port))
+    return sock
 
 def resolve_dns_doh(hostname: str) -> str:
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -52,21 +72,42 @@ def resolve_dns_doh(hostname: str) -> str:
         
     raise RuntimeError(f"Failed to resolve {hostname} via DoH.")
 
-def patched_create_connection(address, *args, **kwargs):
+def patched_create_connection(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None, socket_options=None):
     host, port = address
+    
+    # If the host is already an IP address, connect directly and bypass getaddrinfo
+    if is_ip_address(host):
+        try:
+            return connect_ip(host, port, timeout, source_address, socket_options)
+        except Exception as e:
+            print(f"⚠️ Direct IP connection to {host} failed: {e}")
+            raise e
+
     if host == "api-inference.huggingface.co":
         try:
-            return orig_create_connection(address, *args, **kwargs)
+            return orig_create_connection(address, timeout, source_address, socket_options)
         except Exception as e:
             print(f"⚠️ Standard DNS resolution failed for {host}: {e}. Trying DoH fallback...")
             try:
                 ip = resolve_dns_doh(host)
                 print(f"📡 DoH resolved {host} to {ip}")
-                return orig_create_connection((ip, port), *args, **kwargs)
+                return connect_ip(ip, port, timeout, source_address, socket_options)
             except Exception as doh_err:
-                print(f"⚠️ DoH fallback also failed: {doh_err}")
+                print(f"⚠️ DoH fallback also failed: {doh_err}. Trying static IP fallback...")
+                # Static IP fallback (Cloudflare edge IPs routing to Hugging Face)
+                static_ips = ["104.18.33.242", "172.64.155.249", "104.18.32.242", "172.64.154.249"]
+                import random
+                random.shuffle(static_ips)
+                for ip in static_ips:
+                    try:
+                        sock = connect_ip(ip, port, timeout, source_address, socket_options)
+                        print(f"📡 Connected to {host} via static IP fallback: {ip}")
+                        return sock
+                    except Exception as static_err:
+                        print(f"⚠️ Static IP fallback to {ip} failed: {static_err}")
                 raise e
-    return orig_create_connection(address, *args, **kwargs)
+                
+    return orig_create_connection(address, timeout, source_address, socket_options)
 
 connection.create_connection = patched_create_connection
 
