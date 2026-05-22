@@ -12,64 +12,6 @@ import os
 import requests
 import numpy as np
 
-# ─────────────────────────────────────────────────────────────────────────────
-# DNS Patch for Render DNS Resolution Issues (DoH Fallback)
-# ─────────────────────────────────────────────────────────────────────────────
-import urllib3
-from urllib3.util import connection
-
-orig_create_connection = connection.create_connection
-
-def resolve_dns_doh(hostname: str) -> str:
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    
-    # Try Google DoH by IP
-    try:
-        url = f"https://8.8.8.8/resolve?name={hostname}&type=A"
-        resp = requests.get(url, timeout=5, verify=False)
-        if resp.status_code == 200:
-            data = resp.json()
-            if "Answer" in data:
-                for ans in data["Answer"]:
-                    if ans.get("type") == 1:  # A record
-                        return ans.get("data")
-    except Exception as e:
-        print(f"⚠️ Google DoH resolution failed: {e}")
-        
-    # Try Cloudflare DoH by IP
-    try:
-        url = f"https://1.1.1.1/dns-query?name={hostname}&type=A"
-        headers = {"Accept": "application/dns-json"}
-        resp = requests.get(url, headers=headers, timeout=5, verify=False)
-        if resp.status_code == 200:
-            data = resp.json()
-            if "Answer" in data:
-                for ans in data["Answer"]:
-                    if ans.get("type") == 1:  # A record
-                        return ans.get("data")
-    except Exception as e:
-        print(f"⚠️ Cloudflare DoH resolution failed: {e}")
-        
-    raise RuntimeError(f"Failed to resolve {hostname} via DoH.")
-
-def patched_create_connection(address, *args, **kwargs):
-    host, port = address
-    if host == "api-inference.huggingface.co":
-        try:
-            return orig_create_connection(address, *args, **kwargs)
-        except Exception as e:
-            print(f"⚠️ Standard DNS resolution failed for {host}: {e}. Trying DoH fallback...")
-            try:
-                ip = resolve_dns_doh(host)
-                print(f"📡 DoH resolved {host} to {ip}")
-                return orig_create_connection((ip, port), *args, **kwargs)
-            except Exception as doh_err:
-                print(f"⚠️ DoH fallback also failed: {doh_err}")
-                raise e
-    return orig_create_connection(address, *args, **kwargs)
-
-connection.create_connection = patched_create_connection
-
 embedding_model = None
 ai_detector = None
 
