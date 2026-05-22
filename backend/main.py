@@ -38,6 +38,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "https://*.vercel.app",
+        "https://se-project-two-alpha.vercel.app",
         # Add your production Vercel URL here after deployment
         # "https://your-app.vercel.app",
     ],
