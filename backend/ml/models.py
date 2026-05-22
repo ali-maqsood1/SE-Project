@@ -38,34 +38,59 @@ class RemoteEmbeddingModel:
             }
 
             import time
-            retries = 3
+            retries = 5  # increased retries for loading models
             for attempt in range(retries):
                 try:
                     resp = requests.post(self.api_url, headers=headers, json=payload, timeout=30)
+                    
+                    # 503 Service Unavailable / Loading state
+                    if resp.status_code == 503:
+                        try:
+                            err_data = resp.json()
+                            wait_time = float(err_data.get("estimated_time", 15.0))
+                        except Exception:
+                            wait_time = 15.0
+                        print(f"⏳ Hugging Face model is loading (HTTP 503). Waiting {wait_time}s (attempt {attempt + 1}/{retries})...")
+                        time.sleep(wait_time)
+                        continue
+
+                    # 200 OK
                     if resp.status_code == 200:
                         data = resp.json()
+                        
+                        # Sometimes loading/errors are returned as 200 OK with error payload
+                        if isinstance(data, dict):
+                            if "error" in data:
+                                err_msg = data.get("error", "")
+                                if "loading" in err_msg.lower() or "estimated_time" in data:
+                                    wait_time = float(data.get("estimated_time", 15.0))
+                                    print(f"⏳ Hugging Face model is loading (HTTP 200). Waiting {wait_time}s (attempt {attempt + 1}/{retries})...")
+                                    time.sleep(wait_time)
+                                    continue
+                                else:
+                                    raise ValueError(f"Hugging Face API Error: {err_msg}")
+                            else:
+                                raise ValueError(f"Unexpected JSON object format: {data}")
+                        
                         if isinstance(data, list):
                             arr = np.array(data, dtype=np.float32)
-                            # Handle different response shapes from Hugging Face Inference API:
-                            # 3D: (batch_size, sequence_length, embedding_dim) -> mean-pool sequence dimension
                             if arr.ndim == 3:
                                 arr = np.mean(arr, axis=1)
-                            # 1D: (embedding_dim) -> reshape to (1, embedding_dim)
                             elif arr.ndim == 1:
                                 arr = arr.reshape(1, -1)
                             all_embeddings.extend(arr.tolist())
                             break
                         else:
-                            raise ValueError(f"Unexpected response format: {data}")
-                    elif resp.status_code == 503 and attempt < retries - 1:
-                        print("⏳ Hugging Face embedding model is loading, waiting 10s...")
-                        time.sleep(10)
-                    else:
-                        resp.raise_for_status()
+                            raise ValueError(f"Unexpected response type: {type(data)}")
+                    
+                    # Other status codes
+                    resp.raise_for_status()
+
                 except Exception as e:
                     if attempt == retries - 1:
-                        raise RuntimeError(f"Failed to encode sentences remotely: {e}")
-                    time.sleep(2)
+                        raise RuntimeError(f"Remote embedding failed after {retries} attempts. Error: {str(e)}")
+                    print(f"⚠️ Attempt {attempt + 1} failed: {str(e)}. Retrying in 3s...")
+                    time.sleep(3)
 
         return np.array(all_embeddings, dtype=np.float32)
 
